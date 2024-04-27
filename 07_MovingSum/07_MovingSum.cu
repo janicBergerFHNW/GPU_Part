@@ -62,6 +62,42 @@ inline void gpuAssert(cudaError_t code, const char* file, int line, bool abort =
 __global__ void movingSumSharedMemStatic(int* vec, int* result_vec, int size)
 {
     //ToDo
+    __shared__ int shm_vec[BLOCKSIZE + 2 * RADIUS];
+    int globalIdx = blockIdx.x * blockDim.x + threadIdx.x;
+    shm_vec[threadIdx.x + RADIUS] = vec[globalIdx];
+
+    int nbr_blocks = ((WIDTH % BLOCKSIZE) != 0) ? (WIDTH / BLOCKSIZE + 1) : (WIDTH / BLOCKSIZE);
+    if (blockIdx.x > 0 && threadIdx.x < RADIUS) {
+        shm_vec[threadIdx.x] = vec[globalIdx - RADIUS];
+    }
+    if (blockIdx.x < nbr_blocks - 1 && threadIdx.x  >= BLOCKSIZE - RADIUS) {
+        shm_vec[threadIdx.x + 2 * RADIUS] = vec[globalIdx + RADIUS];
+    }
+    __syncthreads();
+
+
+    // --------------------
+
+    int result = 0;
+    if (globalIdx >= RADIUS && globalIdx < size - RADIUS) {
+        for (int offset = -RADIUS; offset <= RADIUS; offset++) {
+            result += shm_vec[threadIdx.x + RADIUS + offset];
+        }
+    }
+
+    if (globalIdx < RADIUS) {
+        for (int offset = 0 - globalIdx; offset <= RADIUS; offset++) {
+            result += shm_vec[threadIdx.x + RADIUS + offset];
+        }
+    }
+
+    if (globalIdx < size && globalIdx >= size - RADIUS) {
+        for (int offset = -RADIUS; offset < size - globalIdx; offset++) {
+            result += shm_vec[threadIdx.x + RADIUS + offset];
+        }
+    }
+
+    result_vec[globalIdx] = result;
 }
 
 
@@ -79,6 +115,44 @@ __global__ void movingSumSharedMemStatic(int* vec, int* result_vec, int size)
 __global__ void movingSumSharedMemDynamic(int* vec, int* result_vec, int size)
 {
     //ToDo
+    extern __shared__ int dyn[];
+    int* shm_vec = dyn;
+    int globalIdx = blockIdx.x * blockDim.x + threadIdx.x;
+    shm_vec[threadIdx.x + RADIUS] = vec[globalIdx];
+
+    int nbr_blocks = ((WIDTH % BLOCKSIZE) != 0) ? (WIDTH / BLOCKSIZE + 1) : (WIDTH / BLOCKSIZE);
+    if (blockIdx.x > 0 && threadIdx.x < RADIUS) {
+        shm_vec[threadIdx.x] = vec[globalIdx - RADIUS];
+    }
+    if (blockIdx.x < nbr_blocks - 1 && threadIdx.x  >= BLOCKSIZE - RADIUS) {
+        shm_vec[threadIdx.x + 2 * RADIUS] = vec[globalIdx + RADIUS];
+    }
+    __syncthreads();
+
+
+    // --------------------
+
+    int result = 0;
+    if (globalIdx >= RADIUS && globalIdx < size - RADIUS) {
+        for (int offset = -RADIUS; offset <= RADIUS; offset++) {
+            result += shm_vec[threadIdx.x + RADIUS + offset];
+        }
+    }
+
+    if (globalIdx < RADIUS) {
+        for (int offset = 0 - globalIdx; offset <= RADIUS; offset++) {
+            result += shm_vec[threadIdx.x + RADIUS + offset];
+        }
+    }
+
+    if (globalIdx < size && globalIdx >= size - RADIUS) {
+        for (int offset = -RADIUS; offset < size - globalIdx; offset++) {
+            result += shm_vec[threadIdx.x + RADIUS + offset];
+        }
+    }
+
+    result_vec[globalIdx] = result;
+
 }
 
 
@@ -94,6 +168,22 @@ __global__ void movingSumSharedMemDynamic(int* vec, int* result_vec, int size)
 __global__ void movingSumAtomics(int* vec, int* result_vec, int size)
 {
     //ToDo
+    int globalIdx = threadIdx.x + blockIdx.x * blockDim.x;
+    if (globalIdx >= RADIUS && globalIdx < size - RADIUS) {
+        for (int offset = -RADIUS; offset <= RADIUS; offset++) {
+            atomicAdd_system(&result_vec[globalIdx + offset], vec[globalIdx]);
+        }
+    }
+    if (globalIdx < RADIUS) {
+        for (int offset = 0 - globalIdx; offset <= RADIUS; offset++) {
+            atomicAdd_system(&result_vec[globalIdx + offset], vec[globalIdx]);
+        }
+    }
+    if (globalIdx < size && globalIdx >= size - RADIUS) {
+        for (int offset = -RADIUS; offset < size - globalIdx; offset++) {
+            atomicAdd_system(&result_vec[globalIdx + offset], vec[globalIdx]);
+        }
+    }
 }
 
 
@@ -213,11 +303,11 @@ int main(void)
     int nbr_blocks = ((WIDTH % BLOCKSIZE) != 0) ? (WIDTH / BLOCKSIZE + 1) : (WIDTH / BLOCKSIZE);
     movingSumGlobal << <nbr_blocks, BLOCKSIZE >> > (deviceVecInput, deviceVecOutput1, WIDTH);
     gpuErrCheck(cudaPeekAtLastError());
-    //ToDo: movingSumSharedMemStatic << <nbr_blocks, BLOCKSIZE >> > (deviceVecInput, deviceVecOutput2, WIDTH);
+    movingSumSharedMemStatic << <nbr_blocks, BLOCKSIZE >> > (deviceVecInput, deviceVecOutput2, WIDTH);
     gpuErrCheck(cudaPeekAtLastError());
-    //ToDo: movingSumSharedMemDynamic <<<nbr_blocks, BLOCKSIZE, ?????????? >>> (deviceVecInput, deviceVecOutput3, WIDTH);
+    movingSumSharedMemDynamic <<<nbr_blocks, BLOCKSIZE, (BLOCKSIZE + 2 * RADIUS) * sizeof(int) >>> (deviceVecInput, deviceVecOutput3, WIDTH);
     gpuErrCheck(cudaPeekAtLastError());
-    //ToDo: movingSumAtomics << <nbr_blocks, BLOCKSIZE >> > (deviceVecInput, deviceVecOutput4, WIDTH);
+    movingSumAtomics << <nbr_blocks, BLOCKSIZE >> > (deviceVecInput, deviceVecOutput4, WIDTH);
     gpuErrCheck(cudaPeekAtLastError());
 
     // Copy the result stored in device_y back to host_y
