@@ -96,6 +96,12 @@ __global__ void cudaAdd2DMonolithic(int* matrixA, int* matrixB, int* matrixC, in
 __global__ void cudaAdd2DGridStride(int* matrixA, int* matrixB, int* matrixC, int width, int height)
 {
     //ToDo
+    for (int idx = blockIdx.x * blockDim.x + threadIdx.x; idx < width; idx += blockDim.x * gridDim.x) {
+        for (int idy = blockIdx.y * blockDim.y + threadIdx.y; idy < height; idy += blockDim.y * gridDim.y) {
+            int globalIdx = idy * width + idx;
+            matrixC[globalIdx] = matrixA[globalIdx] + matrixB[globalIdx];
+        }
+    }
 }
 
 // Compare result arrays CPU vs GPU result. If no diff, the result pass.
