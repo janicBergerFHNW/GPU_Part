@@ -51,14 +51,46 @@ void reduce(int* vectorA, int* sum, int size)
 }
 
 
+__inline__ __device__ int warpReduceSum(int val) {
+    for (int offset = warpSize / 2; offset > 0; offset >>= 1) {
+        val += __shfl_down_sync(0xFFFFFFFF, val, offset);    
+    }
+    return val;
+}
+
+__inline__ __device__ int blockReduceSum(int val) {
+    static __shared__ int shared[32];
+    int lane = threadIdx.x % warpSize;  // where in warp
+    int wid = threadIdx.x / warpSize;  // which warp
+
+    val = warpReduceSum(val);
+    
+    if (lane == 0) shared[wid] = val;
+
+    __syncthreads();
+
+    val = (threadIdx.x < blockDim.x / warpSize) ? shared[lane] : 0;
+
+    if (wid == 0) val = warpReduceSum(val);
+    
+    return val;
+}
+
 // EXERCISE
 // Read: https://developer.nvidia.com/blog/faster-parallel-reductions-kepler/
 // Implement the reduce kernel based on the information
 // of the Nvidia blog post.
 // Implement both options, using no shared mem at all but global atomics
 // and using shared mem for the seconds recution phase.
-__global__ void cudaEvenFasterReduceAddition() {
+__global__ void cudaEvenFasterReduceAddition(int* vectorA, int* sum, int N) {
     //ToDo
+    int s = 0;
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < N; i += blockDim.x * gridDim.x) {
+        s += vectorA[i];
+    }
+    s = blockReduceSum(s);
+    if (threadIdx.x == 0) 
+        sum[blockIdx.x] = s;
 }
 
 
@@ -81,6 +113,16 @@ __global__ void cudaReduceAddition(int* vectorA, int* sum)
     if (threadIdx.x == 0) {
         sum[blockIdx.x] = shmArray[0];
     }
+}
+
+__global__ void atomicReduceSum(int* vectorA, int* sum, int N) {
+    int s = 0;
+    for (int i = blockIdx.x * blockDim.x + threadIdx.x; i < N; i += blockDim.x * gridDim.x) {
+        s += vectorA[i];
+    }
+    s = warpReduceSum(s);
+    if ((threadIdx.x & (warpSize - 1)) == 0)
+        atomicAdd_system(sum, s);
 }
 
 
@@ -132,11 +174,14 @@ int main(void)
     reduce(hostVectorA, hostSumCPU, N);
 
     // Run kernel on all elements on the GPU
-    cudaReduceAddition <<<NBR_BLOCK, 1024, 2 * 1024 * sizeof(int)>>> (deviceVectorA, deviceSum);
+/*     cudaReduceAddition <<<NBR_BLOCK, 1024, 2 * 1024 * sizeof(int)>>> (deviceVectorA, deviceSum);
     gpuErrCheck(cudaPeekAtLastError());
     cudaReduceAddition <<<1, NBR_BLOCK / 2, NBR_BLOCK * sizeof(int) >> > (deviceSum, deviceSum);
-    gpuErrCheck(cudaPeekAtLastError());
+    gpuErrCheck(cudaPeekAtLastError()); */
 
+
+    atomicReduceSum <<<NBR_BLOCK, 1024>>> (deviceVectorA, deviceSum, N);
+    gpuErrCheck(cudaPeekAtLastError());
     // Copy the result stored in device_y back to host_y
     gpuErrCheck(cudaMemcpy(hostSumGPU, deviceSum, sizeof(int), cudaMemcpyDeviceToHost));
 
